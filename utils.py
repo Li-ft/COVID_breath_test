@@ -135,7 +135,7 @@ def asc_2df(file_path: str) -> pd.DataFrame:
     return df
 
 
-def most_correlated_columns(df: pd.DataFrame, n: int, filename=None) -> list:
+def most_correlated_columns(df: pd.DataFrame, n: int, filename:str=None) -> list:
     corr_matrix = df.corr().abs()
 
     # the matrix is symmetric so we need to extract upper triangle matrix without diagonal (k = 1)
@@ -147,6 +147,11 @@ def most_correlated_columns(df: pd.DataFrame, n: int, filename=None) -> list:
     # 把每个变量的最相关的两个变量加进下面这个列表里
     my_list = []
     for i in range(len(sol)):
+        # 等待验证
+        # amu_num1, amu_num2, *_=sol.index[i]
+        # my_list.append(amu_num1)
+        # my_list.append(amu_num2)
+        # %%%%%%%%%%%%%%%
         if sol.index[i][0] not in my_list:
             my_list.append(sol.index[i][0])
             if len(my_list) >= len(df.columns):
@@ -156,6 +161,7 @@ def most_correlated_columns(df: pd.DataFrame, n: int, filename=None) -> list:
             my_list.append(sol.index[i][1])
             if len(my_list) >= len(df.columns):
                 break
+        # %%%%%%%%%%%%%%%
 
     # if (filename != None):
     #     d = dict()
@@ -174,6 +180,8 @@ def most_correlated_columns(df: pd.DataFrame, n: int, filename=None) -> list:
     #         file1. write(str(element) + "\n")
     #     file1. write("\n\n\n")
     #     file1.close()
+
+    # my_list=sorted(set(my_list), key=my_list.index) # 等待验证
     return my_list[0:n]
 
 
@@ -253,7 +261,6 @@ def read_asc_files(path: str) -> tuple[list, list]:
                 count += 1
             df_o.loc[new_file_name] = features_o.loc[0]
             df_n.loc[new_file_name] = features_n.loc[0]
-            # print("added")
     return list_ori, list_norm
 
 
