@@ -1,6 +1,6 @@
 import sys
 from datetime import datetime
-from typing import Union
+from typing import Union, Optional
 
 import numpy as np
 import yaml
@@ -31,7 +31,7 @@ amu_range = {
 }
 
 
-def read_config(config_path):
+def read_config(config_path:str):
     with open(config_path, 'rb') as f:
         date = yaml.safe_load_all(f)
         return list(date)
@@ -56,38 +56,48 @@ def get_all_file_path(path: str):
     return all_path, all_name
 
 
-def new_filename(file_name):
+def new_filename(file_name:str):
     # input example: feb 22 2022 7_4.ASC
     # replace month name with number
     new_file_name = ' '.join([month_dic.get(i, i) for i in file_name.split(" ")])
-    splits = new_file_name.split()
-    # 日期小于10的时候,在前面加个0
-    try:
-        if int(splits[1]) < 10:
-            new_file_name = splits[2] + splits[0] + '0' + splits[1] + "_" + splits[-1]
+    if '-' in new_file_name:
+        _, new_file_name = new_file_name.split('-')
+        new_file_name = new_file_name.lstrip()
+    if len(splits := new_file_name.split())==4:
+        month, day, year, file_id=splits
+        if int(day)<10:
+            new_file_name=f'{year}{month}0{day}_{file_id}'
         else:
-            new_file_name = splits[2] + splits[0] + splits[1] + "_" + splits[-1]
-    except ValueError:
-        print(f'file name: {file_name}')
-        print(f'new file name: {new_file_name}')
-        print(f'%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%{new_file_name}')
+            new_file_name = f'{year}{month}{day}_{file_id}'
+    splits = new_file_name.split()
+    # when the date is smaller than 10, add a 0 before it
+    # try:
+    #     if int(splits[1]) < 10:
+    #         new_file_name = splits[2] + splits[0] + '0' + splits[1] + "_" + splits[-1]
+    #     else:
+    #         new_file_name = splits[2] + splits[0] + splits[1] + "_" + splits[-1]
+    # except ValueError:
+    #     print(f'file name: {file_name}')
+    #     print(f'new file name: {new_file_name}')
+    #     print(f'%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%{new_file_name}')
 
     # 只要文件名不要扩展名
-    if '.' in new_file_name: new_file_name = new_file_name.split(".")[0]
+    if '.' in new_file_name:
+        new_file_name, _ = os.path.splitext(new_file_name)
     return new_file_name  # 20220222_7_4
 
 
-def asc_2df(file_path: str) -> pd.DataFrame:
+def asc_2df(asc_file_path: str) -> pd.DataFrame:
     block = -1  # new scan
     scan_times = []  # Interval of Scan
     amu_nums = []  # amu values (same for all scan)
     amu_values = []  # read values
-    lst = []  # save the sequence to create the dataframe
+    series_lst = []  # save the sequence to create the dataframe
     last_index = -1  # check for last element (new scan)
 
     scan_times.append('amu')  # st fixed name
 
-    with open(file_path, "r+") as f:
+    with open(asc_file_path, "r+") as f:
         for line_idx, line in enumerate(f):
             line = line.strip()  # ex file jul 9 2021 1_2.ASC contains lines with a space at the beginning
 
@@ -100,12 +110,12 @@ def asc_2df(file_path: str) -> pd.DataFrame:
 
                 if block == 0:  # first block scan finished: save indexes and values (both series)
                     last_index = amu_nums[-1]
-                    lst.append(pd.Series(amu_nums))
-                    lst.append(pd.Series(amu_values))
+                    series_lst.append(pd.Series(amu_nums))
+                    series_lst.append(pd.Series(amu_values))
                     amu_values.clear()  # very imp to vlear the values!
                 continue
 
-            # 每一个block的开头都有一个等号
+            # there is a = at the beginning of every block
             if "=" in line:  # Interval of Scan line -> save the name
                 *_, scan_time = line.split('=')
                 scan_times.append(scan_time.rstrip())
@@ -119,23 +129,24 @@ def asc_2df(file_path: str) -> pd.DataFrame:
             amu_values.append(int(amu_value))
 
             if float(amu_num) == last_index:  # end -> last element of a block
-                lst.append(pd.Series(amu_values))
-                amu_values.clear()
+                series_lst.append(pd.Series(amu_values))
+                amu_values = []
 
     # df creation from all series
-    df = pd.concat(lst, axis=1)
+    df = pd.concat(series_lst, axis=1)
 
     # print(scan_time)
     df.columns = scan_times
 
+    # set the amu number column to be the index
     df = df.set_index('amu')
-    # 处理溢出值 溢出值一般为负数
+    # deal with the overflow values
     for col in df.columns:
         df[col] = df[col].apply(lambda x: x if x >= 0 else 2 ** 32 - 1 + x)
     return df
 
 
-def most_correlated_columns(df: pd.DataFrame, n: int, filename:str=None) -> list:
+def most_correlated_columns(df: pd.DataFrame, n: int, filename: str = None) -> list:
     corr_matrix = df.corr().abs()
 
     # the matrix is symmetric so we need to extract upper triangle matrix without diagonal (k = 1)
@@ -185,7 +196,16 @@ def most_correlated_columns(df: pd.DataFrame, n: int, filename:str=None) -> list
     return my_list[0:n]
 
 
-def feature_selection_corrmax(df: pd.DataFrame, file_path: str, n: int, norm):
+def normalize(df, norm_mode: str = 'ns') -> pd.DataFrame:
+    if norm_mode == 'ns':
+        col = df.sum(axis=0).argmax()  # return index of max sum
+        df = df / df.sum(axis=0)
+    elif norm_mode == 'std':
+        df = (df - df.mean(axis=0)) / df.std(axis=0)
+    return df
+
+
+def feature_selection_corrmax(df: pd.DataFrame, file_path: str, n: int, norm_mode: str) -> dict:
     file_name = new_filename(os.path.basename(file_path))  # obtained file name: 20210721_3_1.ASC
     # remove all 0 columns
     # df = df.replace([np.inf, -np.inf, np.nan], 0)
@@ -199,48 +219,46 @@ def feature_selection_corrmax(df: pd.DataFrame, file_path: str, n: int, norm):
     # Standard Scaler: z = (x - u) / s
     #    df = (df - df.mean(axis=0)) / df.std(axis=0)
 
-    original_df = df.copy()
+    # original_df = df.copy()
 
-    if norm == 'ns':
-        col = df.sum(axis=0).argmax()  # return index of max sum
-        df = df / df.sum(axis=0)
-    if norm == 'std':
-        df = (df - df.mean(axis=0)) / df.std(axis=0)
+    df = normalize(df, norm_mode)
 
-    list_corr_ori = most_correlated_columns(original_df, n, file_name)
-    list_corr = most_correlated_columns(df, n)
-    # 每个amu的中位数
-    highest_or = original_df.loc[:, list_corr_ori].median(axis=1)
-    highest = df.loc[:, list_corr].median(axis=1)
+    # %%%%%%%% feature selection %%%%%%%%%
+    # most_corr_cols_ori = most_correlated_columns(original_df, n, file_name)
+    most_corr_cols_norm = most_correlated_columns(df, n)
+    # %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    # median of each amu values, among the most correlated scan time
+    # median_ori = original_df.loc[:, most_corr_cols_ori].median(axis=1)
+    median_norm = df.loc[:, most_corr_cols_norm].median(axis=1)
 
-    lis_o = list(highest_or.index)
-    lis = list(highest.index)
-    lis.append('day')
-    lis.append('day_pat')
-    lis.append('num')
-    lis_o.append('day')
-    lis_o.append('day_pat')
-    lis_o.append('num')
-    df_h = pd.DataFrame([], columns=lis)
-    df_h_o = pd.DataFrame([], columns=lis_o)
+    # amu_nums_ori = list(median_ori.index)
+    # amu_nums_norm = list(median_norm.index)
+    # amu_nums_norm.append('day')
+    # amu_nums_norm.append('day_test')
+    # amu_nums_norm.append('amu_range')
+    # amu_nums_ori.append('day')
+    # amu_nums_ori.append('day_test')
+    # amu_nums_ori.append('amu_range')
+    # df_norm = pd.DataFrame([], columns=amu_nums_norm)
+    # df_ori = pd.DataFrame([], columns=amu_nums_ori)
     # Add LABEL: 'covid' and 'guarito'
-    splits = file_name.split("_")
-    highest['day'] = highest_or['day'] = file_name.split('_')[0]
-    highest['day_pat'] = highest_or['day_pat'] = file_name.split('.')[0].split("_")[0] + "_" + \
-                                                 file_name.split('.')[0].split("_")[
-                                                     1]
-    highest['num'] = highest_or['num'] = file_name.split('.')[0].split("_")[-1]
-    df_h.loc[0] = highest
-    df_h_o.loc[0] = highest_or
+    # filename: 20210721_3_1.ASC
+    # pure_file_name, _=os.path.splitext(file_name)
+    # date, patient_id, amu_range, *_ = pure_file_name.split("_")
+    # median_norm['day'] = median_ori['day'] = date
+    # median_norm['day_test'] = median_ori['day_test'] = date + "_" + patient_id
+    # median_norm['amu_range'] = median_ori['amu_range'] = amu_range
 
-    # print(df_h_o)
+    # column name is the amu numbers, + day, day_test, amu range
+    # df_norm.loc[0] = median_norm
+    # df_ori.loc[0] = median_ori
 
-    return df_h, df_h_o
+    # print(df_ori)
+    return dict(zip(median_norm.index, median_norm))  # , dict(zip(median_ori.index, median_ori))
+    # return df_norm, df_ori
 
 
-def read_asc_files(path: str) -> tuple[list, list]:
-    list_ori = []
-    list_norm = []
+def read_asc_file(path: str) -> Optional[dict]:
     file_name = os.path.basename(path)
     # print("file_name "+file_name)
     if '_' in file_name:
@@ -250,37 +268,40 @@ def read_asc_files(path: str) -> tuple[list, list]:
         ####### SELECT THE RANGE #######
         ################################
 
-        if new_file_name.split('_')[-1] == '3':  # NUMBER OF RANGE!!!!
+        if new_file_name.split('_')[-1] == '2':  # NUMBER OF RANGE!!!!
+            # columns are scan times
+            # indexes are amu numbers
             df = asc_2df(path)
-            features_n, features_o = feature_selection_corrmax(df, path, 3, 'ns')
+            features_norm = feature_selection_corrmax(df, path, 3, 'ns')
+            # data1={new_file_name: features_norm}
+            # df1=pd.DataFrame(data1,columns=data1.keys())
             # break
-            # print(features_o)
-            if count == 0:
-                df_o = pd.DataFrame([], columns=list(features_o.columns))
-                df_n = pd.DataFrame([], columns=list(features_n.columns))
-                count += 1
-            df_o.loc[new_file_name] = features_o.loc[0]
-            df_n.loc[new_file_name] = features_n.loc[0]
-    return list_ori, list_norm
+            # print(features_ori)
+
+            # df_o = pd.DataFrame([], columns=list(features_ori.columns))
+            # df_n = pd.DataFrame([], columns=list(features_norm.columns))
+            #
+            # df_o.loc[new_file_name] = features_ori.loc[0]
+            # df_n.loc[new_file_name] = features_norm.loc[0]
+            # return df_o, df_n
+            return {new_file_name: features_norm}
+    return None
 
 
-def read_all_files(paths):
-    count = 0
+def read_all_files(paths) -> tuple[pd.DataFrame, pd.DataFrame]:
     patients_df = pd.DataFrame(columns=['covid', 'healed'])
-    ls_ori = []
-    ls_norm = []
+    asc_result_dicts = {}
 
     for path in paths:
         _, ext = os.path.splitext(path)
-        # print("path "+path)
-        if path.endswith('.ASC'):
-            print(path)
 
         if ext == '.ASC':
             # the paths are like     NTA\Raffaele Correale - feb 22 2022 7_4.ASC
-            list_ori, list_norm = read_asc_files(path)
-            ls_ori.extend(list_ori)
-            ls_norm.extend(list_norm)
+            result_dict = read_asc_file(path)
+            if result_dict is None:
+                continue
+            else:
+                asc_result_dicts.update(result_dict)
 
         elif ext == '.csv':
             # get the df using pd.readcsv
@@ -298,21 +319,18 @@ def read_all_files(paths):
                     patients_df.loc[newp, 'covid'] = is_covid
                     patients_df.loc[newp, 'healed'] = healed
 
-
-
-
-
         elif ext == '.xlsx':
-            # get the df using pd.read_excel
+            # this try block is used to filter those encrypted files
             try:
-                patients = pd.read_excel(path,
-                                         header=0).dropna(thresh=6)
+                patients = pd.read_excel(path, header=0).dropna(thresh=6)
             except Exception:
                 continue
 
+            # this block is used in the case of using unnamed column names in some files
             if patients.columns[0] != 'Data Test':
-                patients = pd.read_excel(path,
-                                         header=1).dropna(thresh=6)
+                patients = pd.read_excel(path, header=1).dropna(thresh=6)
+
+            # some date in the files is read as Datetime object while the other files has string date
             try:
                 patients['Data Test'] = patients['Data Test'].apply(lambda date: date.strftime('%Y/%m/%d'))
             except Exception:
@@ -341,3 +359,6 @@ def read_all_files(paths):
                 if str(is_covid) != 'nan':
                     patients_df.loc[newp, 'covid'] = is_covid
                     patients_df.loc[newp, 'healed'] = healed
+
+    amu_data_df = pd.DataFrame(asc_result_dicts, columns=asc_result_dicts.keys())
+    return patients_df, amu_data_df.transpose()
