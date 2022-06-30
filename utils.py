@@ -31,7 +31,7 @@ amu_range = {
 }
 
 
-def read_config(config_path:str):
+def read_config(config_path: str):
     with open(config_path, 'rb') as f:
         date = yaml.safe_load_all(f)
         return list(date)
@@ -56,17 +56,17 @@ def get_all_file_path(path: str):
     return all_path, all_name
 
 
-def new_filename(file_name:str):
+def new_filename(file_name: str):
     # input example: feb 22 2022 7_4.ASC
     # replace month name with number
     new_file_name = ' '.join([month_dic.get(i, i) for i in file_name.split(" ")])
     if '-' in new_file_name:
         _, new_file_name = new_file_name.split('-')
         new_file_name = new_file_name.lstrip()
-    if len(splits := new_file_name.split())==4:
-        month, day, year, file_id=splits
-        if int(day)<10:
-            new_file_name=f'{year}{month}0{day}_{file_id}'
+    if len(splits := new_file_name.split()) == 4:
+        month, day, year, file_id = splits
+        if int(day) < 10:
+            new_file_name = f'{year}{month}0{day}_{file_id}'
         else:
             new_file_name = f'{year}{month}{day}_{file_id}'
     splits = new_file_name.split()
@@ -268,7 +268,7 @@ def read_asc_file(path: str) -> Optional[dict]:
         ####### SELECT THE RANGE #######
         ################################
 
-        if new_file_name.split('_')[-1] == '2':  # NUMBER OF RANGE!!!!
+        if new_file_name.split('_')[-1] == '1':  # NUMBER OF RANGE!!!!
             # columns are scan times
             # indexes are amu numbers
             df = asc_2df(path)
@@ -293,6 +293,8 @@ def read_all_files(paths) -> tuple[pd.DataFrame, pd.DataFrame]:
     asc_result_dicts = {}
 
     for path in paths:
+        if "Preliminari COVID" in path:
+            continue
         _, ext = os.path.splitext(path)
 
         if ext == '.ASC':
@@ -307,17 +309,30 @@ def read_all_files(paths) -> tuple[pd.DataFrame, pd.DataFrame]:
             # get the df using pd.readcsv
             patients = pd.read_csv(path, sep=';', ).dropna(how='all')
             # print(patients.columns)
-            patients['numP'] = patients['# File'].map(lambda x: x.split('_')[0])
+            patients['patient_id'] = patients['# File'].map(lambda x: x.split('_')[0])
             patients['Data Test'] = patients['Data Test'].map(
-                lambda x: x.split('/')[2] + x.split('/')[1] + x.split('/')[0])
+                lambda x: "/".join(x.split('/')[::-1]))
+                # lambda x: x.split('/')[2] + x.split('/')[1] + x.split('/')[0])
             # print(patients)
-            for numP, group in patients.groupby('numP'):
-                newp = str(list(group['Data Test'])[0]) + "_" + str(numP)
+            for patient_id, group in patients.groupby('patient_id'):
+                patient_id = str(list(group['Data Test'])[0]) + "_" + str(patient_id)
                 is_covid = list(group[group.columns[4]])[-1]
+                if is_covid in ['POS', 'SI']:
+                    is_covid=1
+                elif is_covid in ['NO','no','NEG']:
+                    is_covid=0
+                else:
+                    is_covid=-1
                 healed = list(group['Guarito'])[-1]
+                if healed in ['SI','si']:
+                    healed=1
+                elif healed in ['NO','no']:
+                    healed=0
+                else:
+                    healed=-1
                 if str(is_covid) != 'nan':
-                    patients_df.loc[newp, 'covid'] = is_covid
-                    patients_df.loc[newp, 'healed'] = healed
+                    patients_df.loc[patient_id, 'covid'] = is_covid
+                    patients_df.loc[patient_id, 'healed'] = healed
 
         elif ext == '.xlsx':
             # this try block is used to filter those encrypted files
@@ -338,7 +353,7 @@ def read_all_files(paths) -> tuple[pd.DataFrame, pd.DataFrame]:
 
             # 1_2 -> 1
             try:
-                patients['numP'] = patients['# File'].map(lambda x: x.split('_')[0])
+                patients['patient_id'] = patients['# File'].map(lambda x: x.split('_')[0])
             except Exception as e:
                 print(patients)
                 print(e)
@@ -351,14 +366,26 @@ def read_all_files(paths) -> tuple[pd.DataFrame, pd.DataFrame]:
             #     patients['Data Test'] = patients['Data Test'].map(lambda x: print(str(x).split('-')))
             # print(patients)
             # check same patient lines
-            for numP, group in patients.groupby('numP'):
+            for patient_id, group in patients.groupby('patient_id'):
 
-                newp = str(list(group['Data Test'])[0]) + "_" + str(numP)  # '20210714_9'
+                patient_id = str(list(group['Data Test'])[0]) + "_" + str(patient_id)  # '20210714_9'
                 is_covid = list(group[group.columns[4]])[-1]
+                if is_covid in ['POS', 'SI']:
+                    is_covid=1
+                elif is_covid in ['NO','no','NEG']:
+                    is_covid=0
+                else:
+                    is_covid=-1
                 healed = list(group['Guarito'])[-1]
+                if healed in ['SI','si']:
+                    healed=1
+                elif healed in ['NO','no']:
+                    healed=0
+                else:
+                    healed=-1
                 if str(is_covid) != 'nan':
-                    patients_df.loc[newp, 'covid'] = is_covid
-                    patients_df.loc[newp, 'healed'] = healed
+                    patients_df.loc[patient_id, 'covid'] = is_covid
+                    patients_df.loc[patient_id, 'healed'] = healed
 
     amu_data_df = pd.DataFrame(asc_result_dicts, columns=asc_result_dicts.keys())
     return patients_df, amu_data_df.transpose()
