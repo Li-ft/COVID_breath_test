@@ -60,9 +60,11 @@ def new_filename(file_name: str):
     # input example: feb 22 2022 7_4.ASC
     # replace month name with number
     new_file_name = ' '.join([month_dic.get(i, i) for i in file_name.split(" ")])
+    # used for anomaly file name
     if '-' in new_file_name:
         _, new_file_name = new_file_name.split('-')
         new_file_name = new_file_name.lstrip()
+
     if len(splits := new_file_name.split()) == 4:
         month, day, year, file_id = splits
         if int(day) < 10:
@@ -205,10 +207,9 @@ def normalize(df, norm_mode: str = 'ns') -> pd.DataFrame:
     return df
 
 
-def feature_selection_corrmax(df: pd.DataFrame, file_path: str, n: int, norm_mode: str) -> dict:
-    file_name = new_filename(os.path.basename(file_path))  # obtained file name: 20210721_3_1.ASC
+def get_credible_record(df: pd.DataFrame, file_path: str, n: int, norm_mode: str) -> dict[float, float]:
+    # file_name = new_filename(os.path.basename(file_path))  # obtained file name: 20210721_3_1.ASC
     # remove all 0 columns
-    # df = df.replace([np.inf, -np.inf, np.nan], 0)
     df = df.loc[:, (df != 0).any()]
 
     # Normalization bu sum!
@@ -221,7 +222,7 @@ def feature_selection_corrmax(df: pd.DataFrame, file_path: str, n: int, norm_mod
 
     # original_df = df.copy()
 
-    df = normalize(df, norm_mode)
+    # df = normalize(df, norm_mode)
 
     # %%%%%%%% feature selection %%%%%%%%%
     # most_corr_cols_ori = most_correlated_columns(original_df, n, file_name)
@@ -255,6 +256,7 @@ def feature_selection_corrmax(df: pd.DataFrame, file_path: str, n: int, norm_mod
 
     # print(df_ori)
     return dict(zip(median_norm.index, median_norm))  # , dict(zip(median_ori.index, median_ori))
+    # return median_norm.index, median_norm
     # return df_norm, df_ori
 
 
@@ -268,11 +270,11 @@ def read_asc_file(path: str) -> Optional[dict]:
         ####### SELECT THE RANGE #######
         ################################
 
-        if new_file_name.split('_')[-1] == '1':  # NUMBER OF RANGE!!!!
+        if new_file_name.split('_')[-1] in ['1','0']:  # NUMBER OF RANGE!!!!
             # columns are scan times
             # indexes are amu numbers
             df = asc_2df(path)
-            features_norm = feature_selection_corrmax(df, path, 3, 'ns')
+            features_norm = get_credible_record(df, path, 3, 'ns')
             # data1={new_file_name: features_norm}
             # df1=pd.DataFrame(data1,columns=data1.keys())
             # break
@@ -291,9 +293,10 @@ def read_asc_file(path: str) -> Optional[dict]:
 def read_all_files(paths) -> tuple[pd.DataFrame, pd.DataFrame]:
     patients_df = pd.DataFrame(columns=['covid', 'healed'])
     asc_result_dicts = {}
+    patient_name_id={}
 
     for path in paths:
-        if "Preliminari COVID" in path:
+        if "Preliminari COVID" in path or 'bis' in path:
             continue
         _, ext = os.path.splitext(path)
 
@@ -307,15 +310,31 @@ def read_all_files(paths) -> tuple[pd.DataFrame, pd.DataFrame]:
 
         elif ext == '.csv':
             # get the df using pd.readcsv
-            patients = pd.read_csv(path, sep=';', ).dropna(how='all')
-            # print(patients.columns)
-            patients['patient_id'] = patients['# File'].map(lambda x: x.split('_')[0])
+            patients = pd.read_csv(path,dtype='str', sep=';').dropna(how='all')
+            if len(patients.columns) < 2:
+                patients = pd.read_csv(path, dtype='str', sep=',').dropna(how='all')
+            try:
+                patients['day record id'] = patients['# File'].map(lambda x: x.split('_')[0])
+            except Exception as e:
+                print(patients.columns)
+                print(e)
+                print("error in file: " + path)
+                # sys.exit(1)
+
             patients['Data Test'] = patients['Data Test'].map(
                 lambda x: "/".join(x.split('/')[::-1]))
                 # lambda x: x.split('/')[2] + x.split('/')[1] + x.split('/')[0])
             # print(patients)
-            for patient_id, group in patients.groupby('patient_id'):
-                patient_id = str(list(group['Data Test'])[0]) + "_" + str(patient_id)
+            for record_id, group in patients.groupby('day record id'):
+                date=str(list(group['Data Test'])[0])
+                date=''.join(date.split('/'))
+                record_id = date + "_" + str(record_id)
+                full_name=list(group['Nome Cognome'])[0]
+                if full_name in patient_name_id.keys():
+                    patient_id=patient_name_id[full_name]
+                else:
+                    patient_id=len(patient_name_id)
+                    patient_name_id.update({full_name:patient_id})
                 is_covid = list(group[group.columns[4]])[-1]
                 if is_covid in ['POS', 'SI']:
                     is_covid=1
@@ -325,25 +344,27 @@ def read_all_files(paths) -> tuple[pd.DataFrame, pd.DataFrame]:
                     is_covid=-1
                 healed = list(group['Guarito'])[-1]
                 if healed in ['SI','si']:
-                    healed=1
+                        healed = 1
                 elif healed in ['NO','no']:
-                    healed=0
+                        healed = 0
                 else:
-                    healed=-1
-                if str(is_covid) != 'nan':
-                    patients_df.loc[patient_id, 'covid'] = is_covid
-                    patients_df.loc[patient_id, 'healed'] = healed
+                    healed = -1
+                if is_covid != -1:
+                    patients_df.loc[record_id, ['covid','healed','patient id', 'full name']] = [is_covid, healed, patient_id, full_name]
+                    # patients_df.loc[record_id, ]
+                    # patients_df.loc[patient_id, 'covid'] = is_covid
+                    # patients_df.loc[patient_id, 'healed'] = healed
 
         elif ext == '.xlsx':
             # this try block is used to filter those encrypted files
             try:
-                patients = pd.read_excel(path, header=0).dropna(thresh=6)
+                patients = pd.read_excel(path, header=0).dropna(thresh=5)
             except Exception:
                 continue
 
             # this block is used in the case of using unnamed column names in some files
             if patients.columns[0] != 'Data Test':
-                patients = pd.read_excel(path, header=1).dropna(thresh=6)
+                patients = pd.read_excel(path, header=1).dropna(thresh=5)
 
             # some date in the files is read as Datetime object while the other files has string date
             try:
@@ -353,7 +374,7 @@ def read_all_files(paths) -> tuple[pd.DataFrame, pd.DataFrame]:
 
             # 1_2 -> 1
             try:
-                patients['patient_id'] = patients['# File'].map(lambda x: x.split('_')[0])
+                patients['day record id'] = patients['# File'].map(lambda x: x.split('_')[0])
             except Exception as e:
                 print(patients)
                 print(e)
@@ -366,9 +387,16 @@ def read_all_files(paths) -> tuple[pd.DataFrame, pd.DataFrame]:
             #     patients['Data Test'] = patients['Data Test'].map(lambda x: print(str(x).split('-')))
             # print(patients)
             # check same patient lines
-            for patient_id, group in patients.groupby('patient_id'):
-
-                patient_id = str(list(group['Data Test'])[0]) + "_" + str(patient_id)  # '20210714_9'
+            for record_id, group in patients.groupby('day record id'):
+                date = str(list(group['Data Test'])[0])
+                date = ''.join(date.split('/'))
+                record_id = date + "_" + str(record_id)  # '20210714_9'
+                full_name = list(group['Nome Cognome'])[0]
+                if full_name in patient_name_id.keys():
+                    patient_id=patient_name_id[full_name]
+                else:
+                    patient_id=len(patient_name_id)
+                    patient_name_id.update({full_name:patient_id})
                 is_covid = list(group[group.columns[4]])[-1]
                 if is_covid in ['POS', 'SI']:
                     is_covid=1
@@ -379,13 +407,14 @@ def read_all_files(paths) -> tuple[pd.DataFrame, pd.DataFrame]:
                 healed = list(group['Guarito'])[-1]
                 if healed in ['SI','si']:
                     healed=1
-                elif healed in ['NO','no']:
+                elif healed in ['NO','no','No']:
                     healed=0
                 else:
                     healed=-1
-                if str(is_covid) != 'nan':
-                    patients_df.loc[patient_id, 'covid'] = is_covid
-                    patients_df.loc[patient_id, 'healed'] = healed
+                if is_covid != -1:
+                    patients_df.loc[record_id, ['covid','healed','patient id', 'full name']] = [is_covid, healed, patient_id, full_name]
+                    # patients_df.loc[patient_id, 'covid'] = is_covid
+                    # patients_df.loc[patient_id, 'healed'] = healed
 
     amu_data_df = pd.DataFrame(asc_result_dicts, columns=asc_result_dicts.keys())
     return patients_df, amu_data_df.transpose()
