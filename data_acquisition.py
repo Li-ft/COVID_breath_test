@@ -2,13 +2,6 @@ import pandas as pd
 from config import *
 from utils import *
 
-# proj_path = os.path.abspath('.')
-# yaml_path=r'./configuration.yml'
-# config=read_config(yaml_path)
-
-# file_dir=config[0]['data_dir']
-# proj_path=config[0]['proj_path']
-
 paths,names=get_all_file_path(data_dir_path)
 patients_df, asc_data_df=read_all_files(paths)
 
