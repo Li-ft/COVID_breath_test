@@ -2,11 +2,11 @@ import difflib
 import sys
 from datetime import datetime
 from typing import Union, Optional
-
+from sklearn.svm import SVC
 import numpy as np
-import yaml
 import pandas as pd
 import os
+from sklearn.metrics import accuracy_score,precision_score,recall_score,f1_score
 
 month_dic = {
     'jen': '01',
@@ -30,12 +30,6 @@ amu_range = {
     3: (149, 251),
     4: (249, 351)
 }
-
-
-def read_config(config_path: str):
-    with open(config_path, 'rb') as f:
-        date = yaml.safe_load_all(f)
-        return list(date)
 
 
 def get_all_file_path(path: str):
@@ -115,7 +109,7 @@ def asc_2df(asc_file_path: str) -> pd.DataFrame:
                     last_index = amu_nums[-1]
                     series_lst.append(pd.Series(amu_nums))
                     series_lst.append(pd.Series(amu_values))
-                    amu_values.clear()  # very imp to vlear the values!
+                    amu_values.clear()  # very imp to clear the values!
                 continue
 
             # there is a = at the beginning of every block
@@ -208,7 +202,7 @@ def normalize(df, norm_mode: str = 'ns') -> pd.DataFrame:
     return df
 
 
-def get_credible_record(df: pd.DataFrame, file_path: str, n: int, norm_mode: str) -> dict[float, float]:
+def get_credible_record(df: pd.DataFrame, file_path: str, n: int, norm_mode: str, mode:str='mean') -> dict[float, float]:
     # file_name = new_filename(os.path.basename(file_path))  # obtained file name: 20210721_3_1.ASC
     # remove all 0 columns
     df = df.loc[:, (df != 0).any()]
@@ -225,43 +219,17 @@ def get_credible_record(df: pd.DataFrame, file_path: str, n: int, norm_mode: str
 
     # df = normalize(df, norm_mode)
 
-    # %%%%%%%% feature selection %%%%%%%%%
-    # most_corr_cols_ori = most_correlated_columns(original_df, n, file_name)
     most_corr_cols_norm = most_correlated_columns(df, n)
-    # %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-    # median of each amu values, among the most correlated scan time
-    # median_ori = original_df.loc[:, most_corr_cols_ori].median(axis=1)
-    median_norm = df.loc[:, most_corr_cols_norm].median(axis=1)
-
-    # amu_nums_ori = list(median_ori.index)
-    # amu_nums_norm = list(median_norm.index)
-    # amu_nums_norm.append('day')
-    # amu_nums_norm.append('day_test')
-    # amu_nums_norm.append('amu_range')
-    # amu_nums_ori.append('day')
-    # amu_nums_ori.append('day_test')
-    # amu_nums_ori.append('amu_range')
-    # df_norm = pd.DataFrame([], columns=amu_nums_norm)
-    # df_ori = pd.DataFrame([], columns=amu_nums_ori)
-    # Add LABEL: 'covid' and 'guarito'
-    # filename: 20210721_3_1.ASC
-    # pure_file_name, _=os.path.splitext(file_name)
-    # date, patient_id, amu_range, *_ = pure_file_name.split("_")
-    # median_norm['day'] = median_ori['day'] = date
-    # median_norm['day_test'] = median_ori['day_test'] = date + "_" + patient_id
-    # median_norm['amu_range'] = median_ori['amu_range'] = amu_range
-
-    # column name is the amu numbers, + day, day_test, amu range
-    # df_norm.loc[0] = median_norm
-    # df_ori.loc[0] = median_ori
-
-    # print(df_ori)
-    return dict(zip(median_norm.index, median_norm))  # , dict(zip(median_ori.index, median_ori))
-    # return median_norm.index, median_norm
-    # return df_norm, df_ori
+    if mode=='median':
+        median_norm = df.loc[:, most_corr_cols_norm].median(axis=1)
+    elif mode=='mean':
+        median_norm = df.loc[:, most_corr_cols_norm].mean(axis=1)
+    return dict(zip(median_norm.index, median_norm))
 
 
-def read_asc_file(path: str) -> Optional[dict]:
+def read_asc_file(path: str, range_idx:int=1, most_core_rec_num:int=3, mode:str='mean') -> Optional[dict]:
+    if type(range_idx) == int:
+        range_idx = str(range_idx)
     file_name = os.path.basename(path)
     # print("file_name "+file_name)
     if '_' in file_name:
@@ -271,11 +239,15 @@ def read_asc_file(path: str) -> Optional[dict]:
         ####### SELECT THE RANGE #######
         ################################
 
-        if new_file_name.split('_')[-1] in ['1', '0']:  # NUMBER OF RANGE!!!!
+        if new_file_name.split('_')[-1] == range_idx:  # NUMBER OF RANGE!!!!
             # columns are scan times
             # indexes are amu numbers
             df = asc_2df(path)
-            features_norm = get_credible_record(df, path, 3, 'ns')
+            # print(new_file_name)
+            # print(df.index)
+            features_norm = get_credible_record(df, path, most_core_rec_num, 'ns', mode)
+            # if '10.0' in features_norm.keys():
+            #     print('ffffffffffffffffffffffffffffffffffffffffffffffffffffffuck')
             # data1={new_file_name: features_norm}
             # df1=pd.DataFrame(data1,columns=data1.keys())
             # break
@@ -291,7 +263,7 @@ def read_asc_file(path: str) -> Optional[dict]:
     return None
 
 
-def read_all_files(paths) -> tuple[pd.DataFrame, pd.DataFrame]:
+def read_all_files(paths:str,range_idx:int=1,most_core_rec_num:int=3, mode:str='mean') -> tuple[pd.DataFrame, pd.DataFrame]:
     patients_df = pd.DataFrame(columns=['covid', 'healed'])
     asc_result_dicts = {}
     # patient_name_id={}
@@ -303,7 +275,7 @@ def read_all_files(paths) -> tuple[pd.DataFrame, pd.DataFrame]:
 
         if ext == '.ASC':
             # the paths are like     NTA\Raffaele Correale - feb 22 2022 7_4.ASC
-            result_dict = read_asc_file(path)
+            result_dict = read_asc_file(path, range_idx, most_core_rec_num,mode)
             if result_dict is None:
                 continue
             else:
@@ -423,3 +395,58 @@ def read_all_files(paths) -> tuple[pd.DataFrame, pd.DataFrame]:
 
 def string_similar(s1, s2):
     return difflib.SequenceMatcher(None, s1, s2).quick_ratio()
+
+
+
+def svm_classifier(data_df: pd.DataFrame, y_col_name:str):
+    data_df.dropna(subset=y_col_name, inplace=True)
+    # data_df['index'] = data_df.index
+    data_df.index = range(len(data_df))
+    num_data=len(data_df)
+    num_train=int(num_data*0.7)
+    num_test=num_data-num_train
+    print(f'train num is {num_train}/{num_data}')
+    print(f'test num is {num_test}/{num_data}')
+
+    data_df=data_df.sample(frac=1)
+
+    # plt.figure()
+    # plt.scatter(pos_asc_df['30.0'],pos_asc_df['44.0'],label='pos')
+    # plt.scatter(neg_asc_df['30.0'],neg_asc_df['44.0'],label='neg')
+    # plt.legend()
+    # plt.show()
+
+    # asc_df
+    data_df.reset_index(inplace=True)
+    x_train,x_test= data_df.loc[:num_train, :], data_df.loc[num_train:, :]
+    y_train,y_test= data_df.loc[:num_train, 'covid'], data_df.loc[num_train:, 'covid']
+    svm=SVC()
+    svm.fit(x_train,y_train)
+
+    print(f'x test length: {len(x_test)}')
+    pred_result=svm.predict(x_test)
+
+    print(f'Accuracy: {accuracy_score(pred_result,y_test)}')
+    print(f'Precision: {precision_score(pred_result,y_test)}')
+    print(f'Recall: {recall_score(pred_result,y_test)}')
+    print(f'f1 score: {f1_score(pred_result,y_test)}')
+
+    # result=pred_result-y_test
+    # print(result)
+    # print((result!=0).count())
+    # print(f'length of pred result {len(pred_result)}')
+    # print(f'length of y test {len(y_test)}')
+    print(pd.value_counts(pred_result-y_test))
+    result_df=pd.DataFrame()
+    result_df['pred result']=pred_result
+    result_df['y test']=list(y_test)
+    true_pos=len(result_df[(result_df['pred result']==1) & (result_df['y test']==1)])
+    true_neg=len(result_df[(result_df['pred result']==0) & (result_df['y test']==0)])
+    false_neg=len(result_df[(result_df['pred result']==0) & (result_df['y test']==1)])
+    false_pos=len(result_df[(result_df['pred result']==1) & (result_df['y test']==0)])
+    print(true_pos,true_neg,false_pos,false_neg)
+    print(f'Accuracy: {(true_neg+true_pos)/(true_neg+true_pos+false_pos+false_neg)}')
+    print(f'Precision: {true_pos/(true_pos+false_pos)}')
+    print(f'Recall: {true_pos/(true_pos+false_neg)}')
+    print(f'Specificity: {true_neg/(false_pos+true_neg)}')
+

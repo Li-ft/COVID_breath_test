@@ -38,7 +38,7 @@ patient_brief_df['patient id']=pd.NA
 patient_brief_df['index']=patient_brief_df.index
 patient_brief_df['date']=patient_brief_df['index'].apply(lambda x: int(x.split('_')[0]))
 print(patient_brief_df.columns)
-patient_brief_df=patient_brief_df[patient_brief_df['date']<20220101]
+# patient_brief_df=patient_brief_df[patient_brief_df['date']<20220101]
 patient_brief_df=patient_brief_df[~patient_brief_df['index'].str.contains('_0')]
 patient_brief_df.drop(columns=['date'],inplace=True)
 
@@ -60,6 +60,38 @@ for idx,row in patient_brief_df.iterrows():
     patient_brief_df.loc[idx,row.index]=row
     # print(patient_brief_df.loc[idx])
 # print(patient_brief_df)
+
+# assign patient id for record from 2022
+
+patient_id_dict={}
+print(patient_brief_df.columns)
+# patient_with_id_df=patient_brief_df[~pd.isna(patient_brief_df['patient id'])]
+patient_no_id_df=patient_brief_df[pd.isna(patient_brief_df['patient id'])]
+for name, df in patient_no_id_df[['full name','patient id','index']].groupby('full name'):
+    # print(name, '\n', df)
+    patient_with_id_copy_df=patient_brief_df[~pd.isna(patient_brief_df['patient id'])].copy()
+    patient_with_id_copy_df['similarity']=patient_with_id_copy_df['full name'].apply(lambda x: string_similar(name, x))
+    idx_max = patient_with_id_copy_df['similarity'].idxmax()
+    str_similarity_max = patient_with_id_copy_df.loc[idx_max,'similarity']
+    if str_similarity_max>str_similarity_thresh:
+        patient_brief_df.loc[df.index,'patient id']=patient_brief_df.loc[idx_max,'patient id']
+    else:
+        current_max_id=patient_brief_df['patient id'].max()
+        print(current_max_id)
+        patient_brief_df.loc[df.index, 'patient id']=current_max_id+1
+print(patient_brief_df)
+patient_brief_df.to_csv(proj_path+'/data/test3.csv')
+
+    # print(patient_id_dict.values())
+    # patient_id_dict.update({name: patient_brief_df['patient id'].max()+1})
+    # patient_brief_df.loc[patient_brief_df['full name']==name, 'patient id']=patient_id_dict[name]
+    # elif len(set(df['patient id']))==1:
+    #     patient_id_dict.update({name: df['patient id'][0]})
+    # else:
+    #     print('%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%')
+    #     print(df)
+
+
 patient_brief_df.to_csv(proj_path+'/data/test2.csv')
 
 out_df=pd.merge(patient_brief_df,patient_detail_df,how='outer',left_on='full name',right_on='full_name')
