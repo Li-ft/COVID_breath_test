@@ -1,12 +1,14 @@
 import difflib
 import sys
 from datetime import datetime
-from typing import Union, Optional
+from typing import Union, Optional, Collection
+from matplotlib import pyplot as plt
 from sklearn.svm import SVC
 import numpy as np
 import pandas as pd
 import os
 from sklearn.metrics import accuracy_score,precision_score,recall_score,f1_score
+from scipy.signal import find_peaks
 
 month_dic = {
     'jen': '01',
@@ -143,7 +145,7 @@ def asc_2df(asc_file_path: str) -> pd.DataFrame:
     return df
 
 
-def most_correlated_columns(df: pd.DataFrame, n: int, filename: str = None) -> list:
+def get_most_corr_cols(df: pd.DataFrame, n: int, filename: str = None) -> list:
     corr_matrix = df.corr().abs()
 
     # the matrix is symmetric so we need to extract upper triangle matrix without diagonal (k = 1)
@@ -202,7 +204,7 @@ def normalize(df, norm_mode: str = 'ns') -> pd.DataFrame:
     return df
 
 
-def get_credible_record(df: pd.DataFrame, file_path: str, n: int, norm_mode: str, mode:str='mean') -> dict[float, float]:
+def get_credible_record(df: pd.DataFrame, n: int, mode:str='mean') -> dict[float, float]:
     # file_name = new_filename(os.path.basename(file_path))  # obtained file name: 20210721_3_1.ASC
     # remove all 0 columns
     df = df.loc[:, (df != 0).any()]
@@ -219,11 +221,11 @@ def get_credible_record(df: pd.DataFrame, file_path: str, n: int, norm_mode: str
 
     # df = normalize(df, norm_mode)
 
-    most_corr_cols_norm = most_correlated_columns(df, n)
+    most_corr_cols = get_most_corr_cols(df, n)
     if mode=='median':
-        median_norm = df.loc[:, most_corr_cols_norm].median(axis=1)
+        median_norm = df.loc[:, most_corr_cols].median(axis=1)
     elif mode=='mean':
-        median_norm = df.loc[:, most_corr_cols_norm].mean(axis=1)
+        median_norm = df.loc[:, most_corr_cols].mean(axis=1)
     return dict(zip(median_norm.index, median_norm))
 
 
@@ -242,10 +244,16 @@ def read_asc_file(path: str, range_idx:int=1, most_core_rec_num:int=3, mode:str=
         if new_file_name.split('_')[-1] == range_idx:  # NUMBER OF RANGE!!!!
             # columns are scan times
             # indexes are amu numbers
+            print(new_file_name)
             df = asc_2df(path)
+            df=rec_alignment(df.transpose(),rec_space=0.1)
+            if df is None:
+                return None
+            else:
+                df=df.transpose()
             # print(new_file_name)
             # print(df.index)
-            features_norm = get_credible_record(df, path, most_core_rec_num, 'ns', mode)
+            features_norm = get_credible_record(df, most_core_rec_num, mode)
             # if '10.0' in features_norm.keys():
             #     print('ffffffffffffffffffffffffffffffffffffffffffffffffffffffuck')
             # data1={new_file_name: features_norm}
@@ -450,3 +458,87 @@ def svm_classifier(data_df: pd.DataFrame, y_col_name:str):
     print(f'Recall: {true_pos/(true_pos+false_neg)}')
     print(f'Specificity: {true_neg/(false_pos+true_neg)}')
 
+def plot_rec_df(rec_df: pd.DataFrame, log_scale: bool = False):
+    plt.figure(figsize=(50, 10))
+    for idx, row in rec_df.iterrows():
+        plt.plot(row, label=idx)
+    plt.legend()
+    print(plt.xticks())
+    if log_scale:
+        plt.yscale('log')
+    x_ticks=range(int(rec_df.columns[0]),int(rec_df.columns[-1]),1)
+    print(f'x ticks: {x_ticks}')
+    # x_labels=[x for x in x_ticks]
+    # print(f'x labels: {x_labels}')
+    if x_ticks is not None:
+        plt.xticks(x_ticks, x_ticks)
+    plt.grid()
+    plt.show()
+
+from scipy.interpolate import interp1d
+from decimal import Decimal, ROUND_HALF_UP
+def rec_alignment(rec_df: pd.DataFrame, rec_space:float=0.1):
+    '''
+    align the records in the same asc file
+    :param rec_df: dataframe that contain the records' data,
+    columns are the amu value, rows are the simple record
+    :return: aligned record dataframe
+    '''
+
+    for idx, row in rec_df.iterrows():
+        peaks, _ = find_peaks(row, height=0.1, distance=10)
+        if len(peaks) <= 0:
+            return None
+        # get the column name when peaks appear
+        old_peaks = [float(rec_df.columns[peak]) for peak in peaks]
+        try:
+            if int(rec_df.columns[-1])-old_peaks[-1] > 0.5:
+                old_peaks.append(int(rec_df.columns[-1]))
+        except IndexError:
+            print(f'columns:{rec_df.columns}')
+            print(f'old_peaks:{old_peaks}')
+
+        # old_peaks.append(rec_df.columns[-1])
+        print(peaks)
+        print(f'old peaks: {old_peaks}')
+        new_MS=[]
+        amu_begin=float(rec_df.columns[0])
+        if old_peaks[0]-amu_begin<0.5:
+            last_old_peak=old_peaks[0]
+            last_new_peak=int(Decimal(last_old_peak).quantize(Decimal('0'),rounding=ROUND_HALF_UP))
+            old_peaks=old_peaks[1:]
+        else:
+            last_old_peak, last_new_peak= amu_begin,amu_begin
+
+        for old_peak in old_peaks:
+            print(f'last old peak is {last_old_peak}')
+            print(f'old peak is {old_peak}')
+            if old_peak%1!=0:
+                # new_peak=round(old_peak)
+                new_peak=int(Decimal(old_peak).quantize(Decimal('0'),rounding=ROUND_HALF_UP))
+            else:
+                new_peak=old_peak
+            print(f'last new peak is {last_new_peak}')
+            print(f'new peak is {new_peak}')
+            if new_peak!=last_new_peak:
+                # used to replace the np.arange because of rounding error
+                # x_train=np.arange(last_old_peak,old_peak,rec_space)
+                x_train=[x/10 for x in range(int(last_old_peak*10),int(old_peak*10+1))]
+                y_train=row[x_train]
+                x_train=np.linspace(0,1,len(x_train))
+                print(f'x_train:{x_train}')
+                print(f'y_train:{y_train}')
+                interp_f=interp1d(x_train,y_train)
+                x_test=np.linspace(0,1,int((new_peak-last_new_peak)/rec_space),endpoint=False)
+                new_rec_frag=interp_f(x_test)
+                print(f'new rec frag:{new_rec_frag}\n')
+                new_MS.extend(new_rec_frag)
+                last_old_peak=old_peak
+                last_new_peak=new_peak
+            else:
+                raise ValueError('two peaks are too close')
+        new_MS.append(row[rec_df.columns[-1]])
+        print(len(new_MS))
+        new_MS=[int(x) for x in new_MS]
+        rec_df.loc[idx]=new_MS
+    return rec_df
